@@ -1,0 +1,497 @@
+---
+title: 'Regression Analysis #1'
+author: "Aleksander Molak"
+date: "November 28, 2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+path = "C:\\Users\\aleksander.molak\\Documents\\Personal\\Psych\\LINEAR_REGRESSION\\HMWRK1"
+data_file = "ESP_DATA6_HOMEWORK1.SAV"
+color  = '#195e8c'
+color2 = '#d4ff00'
+color3 = '#b80031'
+color4 = '#ffbf00'
+```
+
+
+```{r, include = FALSE, warnings = FALSE}
+library(foreign)
+library(dplyr)
+library(ggplot2)
+library(ggfortify)
+library(olsrr)
+library(sjPlot)
+library(psych)
+library(car)
+library(dummies)
+library(lmtest)
+```
+
+## Read in the data
+
+```{r}
+data <- read.spss(file.path(path, data_file), to.data.frame = TRUE)
+```
+
+## Exploratory data analysis
+
+```{r}
+# Number of observations
+dim(data)[1]
+
+```
+
+```{r}
+summary(data)
+```
+
+
+There's no missing data in the dataset.
+
+There are two categorical variables in the dataset: 
+
+* `EDUC` with 5 levels
+
+* `SEX` with two levels
+
+The latter can be simply encoded as a binary variable. The former needs to be one-hot encoded.
+
+## Recode & clean categorical variables
+
+We will use `male` as our reference point. It will be encoded as `0`.
+
+```{r}
+# Recode `SEX`
+data$SEX <- dplyr::recode(data$SEX, male = 0, female = 1)
+```
+
+Education is a categorical variable - categories like `general highschool` or `profiled highschool` do not seem to be easily translatable to a interval or ratio scale. Let's perform one-hot encoding for `EDUC`:
+
+```{r}
+edu <- data %>% select(EDUC)
+edu_dummy <- dummies::dummy(edu$EDUC, sep = '_')
+data_ohe <- cbind(data, edu_dummy)
+
+```
+
+Now, let's clean the data (remove the original `EDUC` column) and pick our reference point for education. On one hand, I'd like to have a reference somewhere in the middle, which could be a good basis for neat interpretation. On the other hand, the middle category (`general highscholool`) has less observations than many other categories. Taking this into account, I'll choose `higher` as the reference point, to minimize the coefficient standard errors. 
+
+```{r}
+data_ohe <- plyr::rename(data_ohe, 
+                         replace = c('EDUC_profiled highschool' = 'EDUC_profiled_highschool',
+                                     'EDUC_general highschool'  = 'EDUC_general_highschool'))
+```
+
+
+```{r}
+# #### Knitr throws an error here: save the data to csv and re-read ####
+# data_clean <- data_ohe %>% select(-c(EDUC))
+# data_clean <- data_clean %>% select(-c(EDUC_higher))
+# # 
+# write.csv(data_clean, file.path(path, 'data_clean.csv'), row.names = FALSE)
+data_clean <- read.csv(file.path(path, 'data_clean.csv'))
+```
+
+## Examine numerical variables
+
+### Histograms
+
+```{r, fig.align = "center", fig.cap = "Figure 1. Histogram: Wage"}
+# Histogram of DV - MONEY
+ggplot(data_clean, aes(MONEY)) + geom_histogram(bins=7, fill=color, alpha=.7) + 
+                           xlab('Wage') + 
+                           ylab('Count') + 
+                           theme_minimal()
+```
+
+
+```{r, fig.align = "center", fig.cap = "Figure 2. Histogram: Family Wealth Index"}
+# Histogram of DV - MONEY
+ggplot(data_clean, aes(FWI)) + geom_histogram(bins=7, fill=color, alpha=.7) + 
+                           xlab('Family Wealth Index') + 
+                           ylab('Count') + 
+                           theme_minimal()
+```
+
+
+It seems that `FWI` contains a potentially problematic observation(s). There is a small 'bump' in the histogram around the value of `250`. It's much higher than most other values for this variable and much higher than `max` of other numerical variables (`100`). Let's remeber about this and get back to this issue when generating scatterplots.
+
+
+```{r, fig.align = "center", fig.cap = "Figure 4. Histogram: Competence Assessment Index"}
+# Histogram of DV - MONEY
+ggplot(data_clean, aes(CI)) + geom_histogram(bins=7, fill=color, alpha=.7) + 
+                           xlab('Competence Assessment Index') + 
+                           ylab('Count') + 
+                           theme_minimal()
+```
+
+
+```{r, fig.align = "center", fig.cap = "Figure 5. Histogram: Ambitions Questionnaire Score"}
+# Histogram of DV - MONEY
+ggplot(data_clean, aes(AQ)) + geom_histogram(bins=7, fill=color, alpha=.7) + 
+                           xlab('Ambitions Questionnaire Score') + 
+                           ylab('Count') + 
+                           theme_minimal()
+```
+
+
+```{r, fig.align = "center", fig.cap = "Figure 6. Histogram: Index of Work Involvement"}
+# Histogram of DV - MONEY
+ggplot(data_clean, aes(II)) + geom_histogram(bins=7, fill=color, alpha=.7) + 
+                           xlab('Index of work involvement') + 
+                           ylab('Count') + 
+                           theme_minimal()
+```
+
+
+### Check the relationship between variables
+
+I'll now generate scatterplots for DV and all numerical IVs. I will use partial transparency to indicate strength of the relation in case of the overlapping data points. Locally estimated scatterplot smoothing (LOESS) regression lines (Cleveland, 1979; Wickham, 2016) will be added on top of each scatterplot.
+
+
+```{r, fig.align="center", fig.cap="Figure 7. Relationship between Wage and Family Wealth Index with added LOESS regression line."}
+ggplot(data_clean, aes(FWI, MONEY)) + geom_point(color = color, 
+                                          alpha = .2) + 
+                               xlab('Family Wealth Index') + 
+                               ylab('Wage') + 
+                               geom_smooth(color  = color2, 
+                                           method ='loess') + 
+                               theme_minimal()
+```
+
+
+It seems that the observation taking the value of `250` is a serious outlier. Let's make sure if this in an issue with only one data point. 
+
+```{r}
+data_clean$FWI[data_clean$FWI > 100]
+```
+
+```{r}
+length(data_clean$FWI[data_clean$FWI > 100])
+```
+
+There are 70 observations with values `> 100`. It seems reasonable to assume that for `FWI` the maximum value is `110`. 
+
+Let's see how many observations take values `> 110`:
+
+```{r}
+length(data_clean$FWI[data_clean$FWI > 110])
+```
+
+There are two observations like this. Let's look at them closely:
+
+```{r}
+data_clean$FWI[data_clean$FWI > 110]
+```
+
+Both of them take value of `250`. 
+
+```{r}
+for (col in colnames(data_clean)) {
+  cat('Variable', col, 'values for all records with FWI > 110:\n', sep = ' ')
+  cat(unlist(data_clean %>% filter(FWI > 110) %>% select(col)))
+  cat('\n\n')
+}
+
+```
+
+It seems that both cases of `FWI == 250` are in fact the same observation, but doubled.
+
+We don't know if this value is a result of human coding error or an artifact generated by some ETL process on the way. As the dataset is big enough to do so, I decide to delete both observation with `FWI > 250`.
+
+```{r}
+# Remove obs with `FWI` > 110
+data_clean <- data_clean %>% filter(FWI <= 110)
+```
+
+```{r}
+# Sanity check
+sum(data_clean$FWI > 110)
+```
+
+Another potential problem in the `FWI` is it's max value. From the scatterplot it seems that there's a bounding value of `100` and then another one at `110`. This is a possible indicator of measurement error. Also, note that variance of `FWI` seems to be very different between `100` and `110` than in the range of 0 - 100. This might be problematic in the context of homo-/heteroscedasticity. I'll keep that in mind and move forward. We'll come back to these issues when diagnosing the model.
+
+Now let's get back to scatter plots.
+
+```{r, fig.align="center", fig.cap="Figure 8. Relationship between Wage and Family Wealth Index with added LOESS regression line (outliers removed)."}
+ggplot(data_clean, aes(FWI, MONEY)) + geom_point(color = color, 
+                                          alpha = .2) + 
+                               xlab('Family Wealth Index') + 
+                               ylab('Wage') + 
+                               geom_smooth(color  = color2, 
+                                           method ='loess') + 
+                               theme_minimal()
+```
+
+
+```{r, fig.align="center", fig.cap="Figure 9. Relationship between Wage and Competence Assesment Index with added LOESS regression line."}
+ggplot(data_clean, aes(CI, MONEY)) + geom_point(color = color, 
+                                          alpha = .2) + 
+                               xlab('Competence Assesment Index') + 
+                               ylab('Wage') + 
+                               geom_smooth(color  = color2, 
+                                           method ='loess') + 
+                               theme_minimal()
+```
+
+
+```{r, fig.align="center", fig.cap="Figure 10. Relationship between Wage and Ambitions Questionnaire Index with added LOESS regression line."}
+ggplot(data_clean, aes(AQ, MONEY)) + geom_point(color = color, 
+                                          alpha = .2) + 
+                               xlab('Ambitions Questionnaire Index') + 
+                               ylab('Wage') + 
+                               geom_smooth(color  = color2, 
+                                           method ='loess') + 
+                               theme_minimal()
+```
+
+
+```{r, fig.align="center", fig.cap="Figure 11. Relationship between Wage and Index of Work Involvement with added LOESS regression line."}
+ggplot(data_clean, aes(II, MONEY)) + geom_point(color = color, 
+                                          alpha = .2) + 
+                               xlab('Index of Work Involvement') + 
+                               ylab('Wage') + 
+                               geom_smooth(color  = color2, 
+                                           method ='loess') + 
+                               theme_minimal()
+```
+
+## Assumptions of linear regression
+
+### Linearity
+
+From the scatterplots above we can see that most of the variables have reasonably linear relationship with DV. Again, `FWI` is the most controversial in this regard. Let's run full diagnostics to check if and to what etent it's problematic.
+
+To run diagnostics we need to fit the model first.
+
+```{r}
+model_1 <- lm(MONEY ~ ., data = data_clean)
+```
+
+Let's see model summary.
+
+```{r}
+summary(model_1)
+```
+
+
+According to repective $t$ and $p$ values all the variables are significant predictors of the outcome variable. As indicated by the $F$ test ($F(9, 390) = 41.39, p < .001$) `model_1` provides a better fit to the data than a model that contains no independent variables. It remains an open question if dummy recoded `EDUC` as a whole is a significant predictor of $DV$. We'll test for this later.
+
+### Outliers and influential cases
+
+```{r}
+autoplot(model_1, colour = color, smooth.colour = color3, alpha = .3) + theme_minimal()
+```
+
+It seems that observation number `400` is highly problematic. Let's assess its impact on the model.
+
+```{r}
+# Standardized DFBETAS
+dfb_model_1 <- dfbetas(model_1)
+sum(abs(dfb_model_1) > (2 / sqrt(dim(data_clean)[1])))
+```
+
+According to a heuristic strategy ($|DFBETA| > \frac{2}{\sqrt{N}}$) there are $193$ outlying observations. It does not seem reasonable after examining diagnostic plot. Let's see other metrics.
+
+```{r}
+# Standardize DFFITS
+dffits_vec <- dffits(model_1) > (2 / sqrt(dim(data_clean)[2] / dim(data_clean[1])))
+cat(which(dffits_vec == TRUE))
+
+```
+
+DFFITS point to one problematic observation - observation `400`.
+
+```{r}
+# Leverage statistic
+hatvals <- hatvalues(model_1)
+cat('More conservative criterion:')
+cat(which((hatvals > 2*(dim(data_clean)[2] / dim(data_clean)[1])) == TRUE))
+cat('Less conservative criterion:')
+cat(which((hatvals > 3*(dim(data_clean)[2] / dim(data_clean)[1])) == TRUE))
+```
+
+Leverage statistic points to observations `224`, `234`, `235`, `246`, and `400` (more conservative) or only `400` (less conservative) as problematic (Sarkar, nd)
+
+```{r}
+# Cook's distance
+c_dist <- cooks.distance(model_1)
+sum(c_dist > 1)
+```
+
+As suggested by Cook (1982), observations with $D_i > 1$ can be interpreted as influential when the dataset is 'large enough' (Cook et al., 1982). There are no such observations in the data.
+
+Another heuristic says that observations with $D_i > 3 * \mu(D)$ can be treated as influential.
+
+```{r}
+which((c_dist > 3*mean(c_dist)) == TRUE)
+
+```
+
+This heuristic reveals that following obseravtions might be problematic:
+
+`83`, `101`,  `235`,  `241`, `273`, `309`, `386`, `400`. 
+
+Observation `400` seems the most problematic.
+
+It also seems very extreme and unlikely to bring any business value to the analysis.
+
+I decide to remove this observation and re-fit the model.
+
+
+```{r}
+data_clean_NO <- data_clean %>% slice(-400)
+```
+
+
+Re-fit the model.
+
+```{r}
+model_2 <- lm(MONEY ~ ., data_clean_NO)
+```
+
+```{r}
+summary(model_2)
+```
+
+The fit seems much better as expressed by lower $p$ and higher $R^2$ ($R^2_{adj} = .48$ vs $R^2_{adj} = .56$) values. The new model offers better fit to the data than model with no predictors as indicated by $F$ test ($F(9, 389) = 57.92, p < .001$)
+
+Let's examine diagnostic plots of the new fit:
+
+```{r}
+autoplot(model_2, colour = color, smooth.colour = color3, alpha = .3) + theme_minimal()
+```
+
+The current plots indicate that:
+
+* Linearity assumption is fulfilled (fitted values vs residuals plot)
+
+* Normal Q-Q plot indicates that distribution of residuals is normal or very close to normal
+
+* Scale location plot reveals that there might be a slight problem with homoscedasticity.
+
+* Residual vs leverage plot indicates that there are no extreme outliers / influential cases anymore. Further deletions could possibly improve the model fit (e.g. deletions of points `235` or `273`), but that could possibly cause overfitting and hurt model's over generalizability and predictive power.
+
+
+### Homoscedasticity 
+
+Building on top of visual inspection, let's check heteroscedasticity using Breush-Pagan and NCV tests.
+
+
+```{r}
+lmtest::bptest(model_2)
+
+```
+
+```{r}
+car::ncvTest(model_2)
+```
+
+
+Both tests demonstrated insignificant result at customary level $p < .05$. We can assume that homoscedasticity assumption is met.
+
+
+### Multicollinearity
+
+Now, let's examine if the model does not suffer from multicollinearity.
+
+```{r}
+# Correlation matrix
+cor_mtrx <- cor(data_clean_NO)
+```
+
+```{r}
+# Check all corrs > .8
+which((cor_mtrx[cor_mtrx > .8] && cor_mtrx[cor_mtrx != 1]) == TRUE)
+print(cor.test(data_clean_NO$AQ, data_clean_NO$II))
+
+```
+
+
+It seems that correlation between `AQ` and `II` might be potentially problematic. Let's see Variance Inflation Factor values for `model_2`.
+
+
+```{r}
+model_2_vif = vif(model_2)
+print(model_2_vif)
+cat("\nTolerance: ", 1 / model_2_vif)
+```
+
+A well known heuristic says that when $VIF < 5$ then model does not suffer a serious multicollinearity.
+
+Nevertheless, let's temporarily remove one of the highest VIF variables and see how it influences model fit. $VIF$ is the highest for `II`. 
+
+```{r}
+model_2_1 <- lm(MONEY ~ ., data %>% select(-II))
+```
+
+```{r}
+summary(model_2_1)
+```
+
+Removing `II` has worsen model fit. I'll keep this variable.
+
+
+### Autocorrelation (error term independence)
+
+To examine autocorrelation we'll employ Durbin-Watson test. This test examines first order autocorrelation in residuals testing for null hypothesis that autocorrelation does not exist.
+
+```{r}
+# Durbin-Watson test
+durbinWatsonTest(model_2)
+```
+
+Durbin-Watson statistic = $2.08$ indicates that residuals do not present autocorrelation. This result is additionally confirmaed by $p$ value ($p = .63$) based on bootstrapping procedure (Fox, 2019).
+
+## Test if `EDUC` is significant as a category
+
+```{r}
+model_2_NO_NE <- lm(MONEY ~ SEX + FWI + CI + AQ + II, data_clean_NO)
+summary(model_2_NO_NE)
+
+```
+
+```{r}
+anova(model_2_NO_NE, model_2)
+```
+
+Results of ANOVA ($F(4, 389) = 24.87, p < .001$) confirm that the more complex model (`model_2`) offers better fit to the data.
+
+## Interpretation
+
+```{r}
+tab_model(model_2,
+          show.std = TRUE,
+          show.ci  = FALSE,
+          show.se  = TRUE, 
+          show.fstat = TRUE,
+          show.p = TRUE,
+          show.stat = TRUE,
+          p.style = 'asterisk',
+          title = "Table 1. Results of multiple regression analysis for 'model_2'")
+```
+
+The overall regression model is significant ($F(9, 389) = 57.92, p < .001$) with all the included
+predictors showing a significant contribution in explaining the dependent variable. The proposed model explains over 56% of variance in wages ($R^2_{adj} = .56$).
+
+Education has the strongest relative impact on wage. Decrease in earnings is the highest for people with elemetary education compaing to those with higher education ($b = -33.94, t(389) = -9.66, p < .001$), then decrease is the stringest for respectively vocational ($b = -25.96, t(389) = -8.40, p < .001$), profiled highschool ($b = -14.24, t(389) = -5.20, p < .001$) and general highschool education ($b = -10.80, t(389) = -3.90, p < .001$). 
+
+The second strongest factor is gender ($b = -7.83, t(389) = -4.76, p < .001$) indicating that being a woman decreases wage. All other predictors (Family Wealth Index, Competence Assessment Index, Ambition Questionnaire Index and Work Involvement Index) are related to a slight increase of wage (Table 1).
+
+## References
+
+* Box, G.E. (1976). Science and Statistics, *Journal of the American Statistical Association*, *71*(356), 791-799.
+
+* Cook, R.D., Weisberg, S. (1982). *Residuals and Influence in Regression*. New York, NY: Chapman & Hall.
+
+* Cleveland, W.S. (1979). Robust Locally Weighted Regression and Smoothing Scatterplots, *Journal of the American Statistical Association*, *74*(368), 829-836.
+
+* Fox, J., Weisberg, S. (2019). *An R Companion to Applied Regression*. Thousand Oaks, CA: Sage.
+
+* Sarkar, D. (nd). Unusual and Influential Observations. https://www.isid.ac.in/~deepayan/RT2018/notes/unusual-data.pdf
+
+* Wickham, H. (2016). *ggplot2: Elegant Graphics for Data Analysis*. New York: Springer-Verlag.
